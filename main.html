@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Liar's Dice (no wilds) — Probability Helper</title>
+    <style>
+        body{font-family:system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;background:#0f172a;color:#e6eef8;padding:20px}
+        .card{background:#0b1220;padding:18px;border-radius:12px;box-shadow:0 6px 18px rgba(2,6,23,.6);max-width:900px;margin:12px auto}
+        h1{margin:0 0 10px;font-size:20px}
+        label{display:block;margin-top:10px;font-size:13px;color:#98a8c7}
+        input[type=number], select, input[type=text]{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:#071226;color:inherit}
+        .row{display:flex;gap:12px}
+        .col{flex:1}
+        .face-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:8px}
+        .face-grid input{width:100%;text-align:center}
+        button{margin-top:12px;padding:10px 12px;border-radius:10px;border:0;background:#2563eb;color:white;font-weight:600;cursor:pointer}
+        .muted{color:#9fb0d6;font-size:13px}
+        .result{margin-top:12px;padding:12px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))}
+        table{width:100%;border-collapse:collapse;margin-top:8px}
+        td,th{padding:6px;text-align:left;border-bottom:1px dashed rgba(255,255,255,.03);font-size:13px}
+        .best{background:linear-gradient(90deg,#09366b,#0b5ea8);padding:8px;border-radius:8px;color:white;font-weight:700}
+        small{display:block;color:#89a0c6;margin-top:6px}
+        .help{font-size:13px;color:#9fb0d6}
+        pre{background:#021027;padding:8px;border-radius:8px;overflow:auto}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>Liar's Dice (no wilds) — probability helper</h1>
+    <p class="muted">Enter total dice in play, your dice counts (per face), and optionally the previous bid. The tool computes exact probabilities conditioned on your dice and suggests whether to call and the best raise.</p>
+
+    <label>Total dice in play (N)</label>
+    <input id="totalDice" type="number" min="1" value="15" />
+
+    <label>Your number of dice (for validation)</label>
+    <input id="yourDiceCount" type="number" min="0" value="5" />
+
+    <label>Your dice (enter counts for faces 1 through 6)</label>
+    <div class="face-grid">
+        <div><label class="help">1s</label><input id="f1" type="number" min="0" value="1" /></div>
+        <div><label class="help">2s</label><input id="f2" type="number" min="0" value="1" /></div>
+        <div><label class="help">3s</label><input id="f3" type="number" min="0" value="1" /></div>
+        <div><label class="help">4s</label><input id="f4" type="number" min="0" value="1" /></div>
+        <div><label class="help">5s</label><input id="f5" type="number" min="0" value="0" /></div>
+        <div><label class="help">6s</label><input id="f6" type="number" min="0" value="1" /></div>
+    </div>
+
+    <label>Previous bid (optional — amount and face)</label>
+    <div class="row">
+        <div class="col"><input id="prevAmount" type="number" min="1" placeholder="amount (e.g. 4)" /></div>
+        <div class="col"><select id="prevFace"><option value="">-- no previous --</option><option value="1">1s</option><option value="2">2s</option><option value="3">3s</option><option value="4">4s</option><option value="5">5s</option><option value="6">6s</option></select></div>
+    </div>
+
+    <button id="calcBtn">Calculate &amp; Recommend</button>
+
+    <div id="output" class="result" aria-live="polite"></div>
+</div>
+
+<script>
+    // Helper: compute nCk without overflow using iterative multiplicative method
+    function nCk(n,k){
+        if(k<0 || k>n) return 0;
+        k = Math.min(k, n-k);
+        if(k===0) return 1;
+        let num = 1;
+        let den = 1;
+        for(let i=1;i<=k;i++){
+            num *= (n - (k - i));
+            den *= i;
+        }
+        return num/den;
+    }
+
+    function binomialTailAtLeast(M, p, need){
+        // probability of at least `need` successes in M trials
+        if(need<=0) return 1;
+        if(need> M) return 0;
+        let sum=0;
+        for(let i=need;i<=M;i++){
+            sum += nCk(M,i)*Math.pow(p,i)*Math.pow(1-p, M-i);
+        }
+        return sum;
+    }
+
+    function formatPct(x){
+        return (x*100).toFixed(2) + '%';
+    }
+
+    document.getElementById('calcBtn').addEventListener('click', ()=>{
+        const N = parseInt(document.getElementById('totalDice').value,10);
+        const yourDiceCount = parseInt(document.getElementById('yourDiceCount').value,10);
+        const counts = [null,
+            parseInt(document.getElementById('f1').value,10)||0,
+            parseInt(document.getElementById('f2').value,10)||0,
+            parseInt(document.getElementById('f3').value,10)||0,
+            parseInt(document.getElementById('f4').value,10)||0,
+            parseInt(document.getElementById('f5').value,10)||0,
+            parseInt(document.getElementById('f6').value,10)||0
+        ];
+        const prevAmountRaw = document.getElementById('prevAmount').value;
+        const prevFace = document.getElementById('prevFace').value?parseInt(document.getElementById('prevFace').value,10):null;
+        const prevAmount = prevAmountRaw?parseInt(prevAmountRaw,10):null;
+
+        // basic validation
+        const sumYour = counts.slice(1).reduce((a,b)=>a+b,0);
+        if(sumYour !== yourDiceCount){
+            const out = document.getElementById('output');
+            out.innerHTML = `<div class="muted">Warning: your per-face counts sum to ${sumYour} but your dice count value is ${yourDiceCount}. Please fix. (They must match.)</div>`;
+            return;
+        }
+        if(yourDiceCount > N){
+            document.getElementById('output').innerHTML = `<div class="muted">Error: your dice count (${yourDiceCount}) cannot exceed total dice (${N}).</div>`;
+            return;
+        }
+
+        const M = N - yourDiceCount; // number of unknown dice
+        const p = 1/6;
+
+        // probability that a bid (amount k, face f) is true given your counts
+        function probBidAtLeast(k,f){
+            const have = counts[f];
+            const needFromUnknown = Math.max(0, k - have);
+            return binomialTailAtLeast(M, p, needFromUnknown);
+        }
+
+        // compute prev bid probability
+        let prevProb = null;
+        if(prevAmount && prevFace){
+            prevProb = probBidAtLeast(prevAmount, prevFace);
+        }
+
+        // enumerate all legal raises: a bid is (amount, face). We require lexicographic ordering where amounts increase or if same amount, face higher? Liar's rules vary; we'll allow any bid with amount>prevAmount OR (amount===prevAmount AND face>prevFace). If no prev, all bids allowed.
+        const candidates = [];
+        for(let amt=1; amt<=N; amt++){
+            for(let f=1; f<=6; f++){
+                // check legal relative to prev
+                let legal = false;
+                if(!prevAmount || !prevFace){ legal = true; }
+                else if(amt > prevAmount){ legal = true; }
+                else if(amt === prevAmount && f > prevFace){ legal = true; }
+                if(!legal) continue;
+                const pr = probBidAtLeast(amt,f);
+                candidates.push({amt,f,pr});
+            }
+        }
+
+        // sort candidates by probability descending (best to worst)
+        candidates.sort((a,b)=>b.pr - a.pr || a.amt - b.amt || a.f - b.f);
+
+        // choose best raise (highest probability among legal raises that is strictly > prev bid)
+        const best = candidates[0];
+
+        // Decide whether to call: simple rule => call if prevProb < 0.5 (you think it's more likely false than true). Show prevProb too.
+        const out = document.getElementById('output');
+        let html = '';
+        html += `<div><strong>Unknown dice:</strong> ${M} (total ${N} minus your ${yourDiceCount})</div>`;
+        html += `<small class="help">Probabilities are exact (binomial), conditioned on your known dice.</small>`;
+
+        if(prevProb !== null){
+            html += `<hr />`;
+            html += `<div><strong>Previous bid:</strong> ${prevAmount} of ${prevFace}s</div>`;
+            html += `<div>Probability that this bid is <em>true</em>: <span class="best">${formatPct(prevProb)}</span></div>`;
+
+            if(prevProb < 0.5){
+                html += `<div style="margin-top:8px;padding:8px;border-radius:8px;background:#3b1230;color:#ffddeb;font-weight:700">Recommendation: <u>CALL</u> — previous bid is unlikely (prob ${formatPct(prevProb)})</div>`;
+            } else {
+                html += `<div style="margin-top:8px;padding:8px;border-radius:8px;background:#08321a;color:#d7ffe7;font-weight:700">Recommendation: <u>DO NOT CALL</u> — previous bid is likely (prob ${formatPct(prevProb)})</div>`;
+                html += `<div style="margin-top:8px">Best raise (highest probability among legal raises): <span class="best">${best.amt} of ${best.f}s</span> — probability ${formatPct(best.pr)}</div>`;
+
+                // Also show a short table of top 6 candidate raises
+                html += '<table><thead><tr><th>rank</th><th>bid</th><th>probability</th></tr></thead><tbody>';
+                for(let i=0;i<Math.min(6,candidates.length);i++){
+                    const c = candidates[i];
+                    html += `<tr><td>${i+1}</td><td>${c.amt} of ${c.f}s</td><td>${formatPct(c.pr)}</td></tr>`;
+                }
+                html += '</tbody></table>';
+            }
+        } else {
+            // no previous bid: suggest the best bid overall (highest probability)
+            html += `<hr />`;
+            html += `<div>Suggested first bid (maximizes probability of being true): <span class="best">${best.amt} of ${best.f}s</span> — probability ${formatPct(best.pr)}</div>`;
+            html += `<small class="help">This suggests the "safest" bid (most likely to be true) — you can play more aggressively if you want lower-probability higher bids.</small>`;
+        }
+
+        // provide a small explanation section
+        html += `<hr /><div><strong>Quick notes:</strong>
+        <ul>
+          <li>All calculations treat each unknown die as independently 1/6 chance for a given face.</li>
+          <li>Probabilities are conditioned on your visible dice; they are exact binomial tail probabilities.</li>
+          <li>Decision rule used here: call if previous bid has &lt;50% chance of being true. You can change that threshold in the code to be more/less conservative.</li>
+        </ul>
+      </div>`;
+
+        // list your dice summary
+        html += `<hr /><div><strong>Your dice summary:</strong> `;
+        for(let f=1;f<=6;f++) html += `${counts[f]}×${f}${f<6?', ':''}`;
+        html += `</div>`;
+
+        out.innerHTML = html;
+    });
+    // identify bluff options: low probability but still legal raises (e.g. pr < 0.3)
+    const bluffs = candidates.filter(c=>c.pr < 0.3).slice(-6);
+    if(prevProb !== null && prevProb >= 0.5){
+        html += `<hr /><div><strong>Bluff suggestions (low probability bids to pressure opponent):</strong></div>`;
+        html += '<table><thead><tr><th>bid</th><th>probability</th></tr></thead><tbody>';
+        for(const b of bluffs){ html += `<tr><td>${b.amt} of ${b.f}s</td><td>${formatPct(b.pr)}</td></tr>`; }
+        html += '</tbody></table>';
+    }
+
+</script>
+</body>
+</html>
